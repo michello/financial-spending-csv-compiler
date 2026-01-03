@@ -2,6 +2,8 @@
 
 This repository generates a consolidated CSV summary of expenses that can be imported into an expense and income tracking spreadsheet.
 
+[link to financial csv compiler](https://michello.github.io/year-end-financials/)
+
 **Prerequisite:**  
 Make a copy of this Google Sheets template before getting started:  
 https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit?gid=2058213571#gid=2058213571
