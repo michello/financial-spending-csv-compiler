@@ -1,25 +1,35 @@
 # Financial CSV Compiler
-This repo is meant to generate a CSV summary of expenses to 
 
-Pre-req: duplicate this [google sheets](https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit?gid=2058213571#gid=2058213571)
+This repository generates a consolidated CSV summary of expenses that can be imported into an expense and income tracking spreadsheet.
 
-## How to use
-1. Download CSV files from your banks if supported:
-    * AMEX
-    * Capital One
-    * Chase
-    * Chase - Business
-    * Discover
-    * Old Navy
-    * Venmo --> coming soon!
-    * WealthFront --> coming soon!
-3. Upload all CSVs that you want to be cleaned and combined by selecting `Choose File`: ![choose file button](img/upload-button.png)
+**Prerequisite:**  
+Make a copy of this Google Sheets template before getting started:  
+https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit?gid=2058213571#gid=2058213571
 
-4. Once you've uploaded the file, you can change the card type to ensure that the uploaded CSV is for the correct card type: ![alt text](image.png)
+## How to Use
 
-5. After uploading however number of cards you like, you can get the aggregated output by selecting `Compile` button which is next to the `Choose File` button.
+1. Download CSV files from your supported banks or services:
+    - AMEX  
+    - Capital One  
+    - Chase  
+    - Chase (Business)  
+    - Discover  
+    - Old Navy  
+    - Venmo *(coming soon)*  
+    - Wealthfront *(coming soon)*  
 
-6. Select `Download compiled CSV` file and use this file in the Expense + Income Tracker Template by:
-    - Copy the contents from the compiled CSV
-    - Paste the contents into the [`Expenses` tab of the spreadsheet](https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit?gid=1528073380#gid=1528073380).
-    - Select the pasted contents, then select `Data` dropdown in Google Sheets, and then select `Split Text to Columns`
+2. Upload all CSV files you want cleaned and combined by clicking **Choose File**.  
+   ![Choose File button](img/upload-button.png)
+
+3. After uploading a file, verify or update the card type to ensure the CSV is categorized correctly.  
+   ![Card type selector](image.png)
+
+4. Repeat the upload process for as many cards as you’d like.
+
+5. Once all files are uploaded, click **Compile** (located next to the **Choose File** button) to generate the aggregated output.
+
+6. Click **Download Compiled CSV**, then import it into the Expense + Income Tracker template:
+    - Copy the contents of the compiled CSV
+    - Paste them into the **Expenses** tab of the spreadsheet:  
+      https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit?gid=1528073380#gid=1528073380
+    - Select the pasted data, open the **Data** menu in Google Sheets, and choose **Split text to columns**
