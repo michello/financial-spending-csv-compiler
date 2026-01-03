@@ -48,6 +48,8 @@ const CardType = {
   CHASE_BUSINESS: "CHASE_BUSINESS",
   DISCOVER: "DISCOVER",
   OLD_NAVY: "OLD_NAVY",
+  VENMO: "VENMO",
+  FIDELITY: "FIDELITY",
 };
 
 const CARD_TO_HEADER_INDEX = {
@@ -106,6 +108,8 @@ const FILENAME_HINTS = [
   { contains: "chase-sapphire-preferred", source: "Chase - Sapphire Preferred", cardType: CardType.CHASE },
   { contains: "discover", source: "Discover", cardType: CardType.DISCOVER },
   { contains: "old-navy", source: "Old Navy", cardType: CardType.OLD_NAVY },
+  { contains: "venmo", source: "Venmo", cardType: CardType.VENMO },
+  { contains: "fidelity", source: "Fidelity", cardType: CardType.FIDELITY },
 ];
 
 function inferMetaFromFilename(filename) {
@@ -166,9 +170,32 @@ function processCategory(raw_item, raw_category) {
 }
 
 function parseNumber(raw_amount) {
-  const cleaned = String(raw_amount ?? "").replace(/[$,]/g, "").trim();
-  const n = Number.parseFloat(cleaned);
-  return Number.isNaN(n) ? null : n;
+  let s = String(raw_amount ?? "").trim();
+  if (!s) return null;
+
+  // Handle parentheses negative: ($20.00)
+  let parenNeg = false;
+  if (s.startsWith("(") && s.endsWith(")")) {
+    parenNeg = true;
+    s = s.slice(1, -1).trim();
+  }
+
+  // Remove quotes, currency, commas
+  s = s.replace(/["']/g, "").replace(/[$,]/g, "").trim();
+
+  // Handle "+ 89.00" / "- 20.00"
+  const m = s.match(/^([+-])\s*(\d+(\.\d+)?|\.\d+)$/);
+  if (m) {
+    const sign = m[1] === "-" ? -1 : 1;
+    const n = Number.parseFloat(m[2]);
+    if (Number.isNaN(n)) return null;
+    const val = sign * n;
+    return parenNeg ? -Math.abs(val) : val;
+  }
+
+  const n = Number.parseFloat(s);
+  if (Number.isNaN(n)) return null;
+  return parenNeg ? -Math.abs(n) : n;
 }
 
 function processRawAmount(raw_amount) {
@@ -201,8 +228,71 @@ async function parseCsvFile(file) {
   });
 }
 
+/** ------------------------
+ * Header-based helpers (Venmo/Fidelity)
+ * ------------------------*/
+function normalizeHeaderKey(s) {
+    console.log(s);
+  return String(s ?? "")
+    .replace(/\uFEFF/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function normalizeCell(v) {
+  return String(v ?? "").replace(/\uFEFF/g, "").trim();
+}
+
+function headerIndexMap(headerRow) {
+  const map = new Map();
+  for (let i = 0; i < headerRow.length; i++) {
+    const key = normalizeHeaderKey(headerRow[i]);
+    if (key) map.set(key, i);
+  }
+  return map;
+}
+
+function getByHeaderIdx(row, map, headerName) {
+  const idx = map.get(normalizeHeaderKey(headerName));
+  return idx == null ? "" : normalizeCell(row[idx]);
+}
+
+/** ------------------------
+ * Venmo helpers
+ * ------------------------*/
+function findVenmoHeaderRowIndex(data) {
+  const need = ["datetime", "amount (total)", "status", "type", "note"];
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i] || [];
+    const keys = new Set(row.map(normalizeHeaderKey).filter(Boolean));
+    let ok = true;
+    for (const k of need) {
+      if (!keys.has(k)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+function applyVenmoSign(absAmount, type, venmoSign) {
+  const t = String(type ?? "").trim().toLowerCase();
+  const a = Math.abs(absAmount);
+
+  // Per your default convention:
+  // Payment => positive (negatePayments false)
+  // Charge  => negative (negateCharges true)
+  if (t === "payment") return venmoSign.negatePayments ? -a : a;
+  if (t === "charge") return venmoSign.negateCharges ? -a : a;
+
+  return absAmount;
+}
+
 export default function CardSpendingCompiler() {
-  const [filesMeta, setFilesMeta] = useState([]); // [{id, file, source, cardType}]
+  const [filesMeta, setFilesMeta] = useState([]); // [{id, file, source, cardType, venmoSign?}]
   const [compiled, setCompiled] = useState([]); // [{id, source, date, item, amount, category, spender}]
   const [errors, setErrors] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -235,6 +325,11 @@ export default function CardSpendingCompiler() {
           file,
           source: inferred.source || file.name,
           cardType: inferred.cardType,
+          // Venmo defaults: Charge negative, Payment positive
+          venmoSign:
+            inferred.cardType === CardType.VENMO
+              ? { negatePayments: false, negateCharges: true }
+              : undefined,
         });
         existingIds.add(id);
       }
@@ -296,6 +391,98 @@ export default function CardSpendingCompiler() {
 
       for (const meta of filesMeta) {
         const { file, source, cardType } = meta;
+
+        // ---- VENMO ----
+        if (cardType === CardType.VENMO) {
+          const data = await parseCsvFile(file);
+          if (!Array.isArray(data) || data.length === 0) continue;
+
+          const headerRowIdx = findVenmoHeaderRowIndex(data);
+          if (headerRowIdx < 0) {
+            throw new Error(`Venmo header row not found in file: ${file.name}`);
+          }
+
+          const headerRow = data[headerRowIdx];
+          const map = headerIndexMap(headerRow);
+
+          const venmoSign = meta.venmoSign ?? { negatePayments: false, negateCharges: true };
+
+          for (let i = headerRowIdx + 1; i < data.length; i++) {
+            const row = data[i];
+            if (!row || !row.length) continue;
+
+            const status = normalizeCell(getByHeaderIdx(row, map, "Status")).toLowerCase();
+            if (!status.startsWith("complete")) continue;
+
+            const dt = getByHeaderIdx(row, map, "Datetime");
+            const note = getByHeaderIdx(row, map, "Note");
+            const type = getByHeaderIdx(row, map, "Type");
+            const amtRaw = getByHeaderIdx(row, map, "Amount (total)");
+
+            const parsed = parseNumber(amtRaw);
+            if (parsed == null) continue;
+
+            // Ignore Venmo CSV sign and apply our convention using Type + toggles
+            const baseAmount = Math.abs(parsed);
+            const amount = applyVenmoSign(baseAmount, type, venmoSign);
+
+            out.push({
+              id: `${source || "Venmo"}__${file.name}__${rowCounter++}`,
+              source: source || "Venmo",
+              date: dt,
+              item: note || "(Venmo)",
+              amount,
+              category: "Other",
+              spender: spenderName,
+            });
+          }
+
+          continue;
+        }
+
+        // ---- FIDELITY ----
+        if (cardType === CardType.FIDELITY) {
+            let data = await parseCsvFile(file);
+            if (!Array.isArray(data) || data.length === 0) continue;
+
+            // Heuristic: skip header row if it looks like one
+            const looksLikeHeader = (row) => {
+                const first = String(row?.[0] ?? "").toLowerCase();
+                return first.includes("date") || first.includes("run date");
+            };
+
+            let startIdx = 0;
+            if (looksLikeHeader(data[0])) startIdx = 1;
+
+            for (let i = startIdx; i < data.length; i++) {
+                const row = data[i];
+                if (!row || !row.length) continue;
+
+                const date = String(row[0] ?? "").trim();
+                const txnType = String(row[3] ?? "").trim();     // "Contributions"
+                const item = String(row[5] ?? "").trim();        // investment name
+                const amtRaw = row[12];                          // amount
+
+                if (normalizeHeaderKey(txnType) !== "contributions") continue;
+
+                const amtParsed = parseNumber(amtRaw);
+                if (amtParsed == null) continue;
+
+                out.push({
+                id: `Fidelity__${file.name}__${rowCounter++}`,
+                source: "Fidelity",
+                date,
+                item: item || "(Fidelity Contribution)",
+                amount: Math.abs(amtParsed),
+                category: "Investments",
+                spender: spenderName,
+                });
+            }
+
+            continue;
+            }
+
+        // ---- OTHER CARDS ----
         const header = CARD_TO_HEADER_INDEX[cardType];
         if (!header) throw new Error(`Unknown cardType: ${cardType}`);
 
@@ -334,7 +521,7 @@ export default function CardSpendingCompiler() {
             cardType === CardType.OLD_NAVY ? "Shopping" : processCategory(raw_item, raw_category);
 
           out.push({
-            id: `${source}__${file.name}__${rowCounter++}`, // stable enough for this session
+            id: `${source}__${file.name}__${rowCounter++}`,
             source,
             date: raw_date,
             item: raw_item,
@@ -373,11 +560,18 @@ export default function CardSpendingCompiler() {
     <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
       <h2 style={{ marginTop: 0 }}>Card Spending CSV Compiler</h2>
       <p>
-        Card Spending CSV Compiler is a client-side tool that combines transaction CSVs from multiple credit cards into a single, normalized output. It standardizes spending categories so the resulting CSV can be directly copied into the Expenses tab of this <a href="https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit#gid=2058213571">Google Sheets template for year-end financial tracking.</a>
+        Card Spending CSV Compiler is a client-side tool that combines transaction CSVs from multiple credit cards into a single, normalized output. It standardizes spending categories so the resulting CSV can be directly copied into the Expenses tab of this{" "}
+        <a href="https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit#gid=2058213571">
+          Google Sheets template for year-end financial tracking.
+        </a>
       </p>
       <p>
-        For more info on how to use, <a href="https://github.com/michello/year-end-financials?tab=readme-ov-file#financial-csv-compiler">please check out the readme.</a>
+        For more info on how to use,{" "}
+        <a href="https://github.com/michello/year-end-financials?tab=readme-ov-file#financial-csv-compiler">
+          please check out the readme.
+        </a>
       </p>
+
       {/* Spender input */}
       <div style={{ marginBottom: 16 }}>
         <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
@@ -424,6 +618,7 @@ export default function CardSpendingCompiler() {
                   <th style={th}>Filename</th>
                   <th style={th}>Source (output col)</th>
                   <th style={th}>Card Type</th>
+                  <th style={th}>Options</th>
                   <th style={th}>Actions</th>
                 </tr>
               </thead>
@@ -441,7 +636,20 @@ export default function CardSpendingCompiler() {
                     <td style={td}>
                       <select
                         value={m.cardType}
-                        onChange={(e) => updateMeta(m.id, { cardType: e.target.value })}
+                        onChange={(e) => {
+                          const nextType = e.target.value;
+                          updateMeta(m.id, {
+                            cardType: nextType,
+                            venmoSign:
+                              nextType === CardType.VENMO
+                                ? (m.venmoSign ?? { negatePayments: false, negateCharges: true })
+                                : undefined,
+                            source:
+                              nextType === CardType.FIDELITY
+                                ? "Fidelity"
+                                : m.source,
+                          });
+                        }}
                         style={{ width: "100%", padding: 8 }}
                       >
                         {Object.values(CardType).map((ct) => (
@@ -451,6 +659,52 @@ export default function CardSpendingCompiler() {
                         ))}
                       </select>
                     </td>
+
+                    {/* Options */}
+                    <td style={{ ...td, whiteSpace: "normal" }}>
+                      {m.cardType === CardType.VENMO ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              type="checkbox"
+                              checked={m.venmoSign?.negatePayments ?? false}
+                              onChange={(e) =>
+                                updateMeta(m.id, {
+                                  venmoSign: {
+                                    negatePayments: e.target.checked,
+                                    negateCharges: m.venmoSign?.negateCharges ?? true,
+                                  },
+                                })
+                              }
+                            />
+                            Make <b>Payment</b> negative
+                          </label>
+
+                          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              type="checkbox"
+                              checked={m.venmoSign?.negateCharges ?? true}
+                              onChange={(e) =>
+                                updateMeta(m.id, {
+                                  venmoSign: {
+                                    negatePayments: m.venmoSign?.negatePayments ?? false,
+                                    negateCharges: e.target.checked,
+                                  },
+                                })
+                              }
+                            />
+                            Make <b>Charge</b> negative
+                          </label>
+
+                          <div style={{ color: "#666", fontSize: 12 }}>
+                            Default: Payment = positive, Charge = negative
+                          </div>
+                        </div>
+                      ) : (
+                        <span style={{ color: "#666" }}>—</span>
+                      )}
+                    </td>
+
                     <td style={td}>
                       <button onClick={() => removeFile(m.id)} disabled={isRunning} style={{ padding: "8px 12px" }}>
                         Remove
