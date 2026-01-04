@@ -36,3 +36,6 @@ https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZU
     - Paste them into the **Expenses** tab of the spreadsheet:  
       https://docs.google.com/spreadsheets/d/12fIziabNlr78DHNmiQKuXEieBptjaTfjoyrLM1ZUCuk/edit?gid=1528073380#gid=1528073380
     - Select the pasted data, open the **Data** menu in Google Sheets, and choose **Split text to columns**
+
+## Disclaimer
+Most of this code is generated via chat gpt. The application also does not save or retain any data uploaded from CSV.
